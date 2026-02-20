@@ -1,0 +1,27 @@
+[Unit]
+Description=Polymarket BTC 5-Min Orderbook Collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=deploy
+WorkingDirectory=/opt/prediction-market-analysis
+ExecStart=/opt/prediction-market-analysis/.venv/bin/python scripts/collect_btc_orderbooks.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=btc-collector
+
+# Graceful shutdown
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/prediction-market-analysis/data
+
+[Install]
+WantedBy=multi-user.target
