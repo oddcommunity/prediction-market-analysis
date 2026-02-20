@@ -24,6 +24,11 @@ research/*
 
 scratchpad
 
+# Private strategy scripts
+scripts/backtest_*.py
+scripts/collect_btc_orderbooks.py
+scripts/collect_btc_orderbooks.service
+
 fig
 *.tar.zst
 output
