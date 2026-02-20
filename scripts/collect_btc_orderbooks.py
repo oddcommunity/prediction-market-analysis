@@ -50,7 +50,6 @@ CLOB_API_URL = "https://clob.polymarket.com"
 GAMMA_API_URL = "https://gamma-api.polymarket.com"
 
 ORDERBOOK_INTERVAL = 1.0  # seconds between orderbook polls
-TRADES_INTERVAL = 5.0  # seconds between trade polls
 MARKET_CHECK_INTERVAL = 10.0  # seconds between market discovery checks
 
 # Slug pattern: btc-updown-5m-{epoch} where epoch = start of 5-min window
@@ -235,20 +234,17 @@ async def binance_stream(writer: JsonlWriter, shutdown: asyncio.Event):
 
 
 # ---------------------------------------------------------------------------
-# Task 2: Polymarket orderbook + trades poller
+# Task 2: Polymarket orderbook poller
 # ---------------------------------------------------------------------------
 
 
 async def polymarket_poller(
     market: ActiveMarket,
     ob_writer: JsonlWriter,
-    trades_writer: JsonlWriter,
     shutdown: asyncio.Event,
 ):
-    """Poll Polymarket orderbook (1s) and trades (5s) for the active market."""
+    """Poll Polymarket orderbook every 1s for the active market."""
     async with httpx.AsyncClient(timeout=10.0) as client:
-        last_trade_poll = 0.0
-
         while not shutdown.is_set():
             if not market.is_active() or market.token_up is None:
                 await asyncio.sleep(1)
@@ -259,7 +255,6 @@ async def polymarket_poller(
             token_up = market.token_up
             token_down = market.token_down
 
-            # -- Orderbook snapshots (UP and DOWN) --
             for side, token_id in [("UP", token_up), ("DOWN", token_down)]:
                 book = await _http_get(client, f"{CLOB_API_URL}/book", params={"token_id": token_id})
                 if book is None:
@@ -281,30 +276,6 @@ async def polymarket_poller(
                     "best_ask": best_ask,
                     "mid": mid,
                 })
-
-            # -- Trades (every 5s) — requires CLOB API key --
-            now = time.monotonic()
-            if now - last_trade_poll >= TRADES_INTERVAL:
-                last_trade_poll = now
-                for side, token_id in [("UP", token_up), ("DOWN", token_down)]:
-                    trades_data = await _http_get(
-                        client,
-                        f"{CLOB_API_URL}/trades",
-                        params={"asset_id": token_id, "limit": 50},
-                        retries=1,
-                    )
-                    if trades_data and isinstance(trades_data, list):
-                        for t in trades_data:
-                            trades_writer.write({
-                                "ts": _now_ms(),
-                                "slug": slug,
-                                "side": side,
-                                "price": t.get("price"),
-                                "size": t.get("size"),
-                                "trade_ts": t.get("match_time") or t.get("created_at"),
-                                "maker": t.get("maker_address"),
-                                "taker": t.get("taker_address"),
-                            })
 
             # Sleep until next orderbook poll
             elapsed = (_now_ms() - ts) / 1000
@@ -477,7 +448,6 @@ async def main():
     binance_writer = JsonlWriter(DATA_DIR, "binance_ticks.jsonl.gz")
     ob_writer = JsonlWriter(DATA_DIR, "orderbooks.jsonl.gz")
     markets_writer = JsonlWriter(DATA_DIR, "markets.jsonl.gz")
-    trades_writer = JsonlWriter(DATA_DIR, "trades.jsonl.gz")
 
     # Shared state
     market = ActiveMarket()
@@ -485,7 +455,7 @@ async def main():
     # Run all tasks concurrently
     tasks = [
         asyncio.create_task(binance_stream(binance_writer, shutdown), name="binance"),
-        asyncio.create_task(polymarket_poller(market, ob_writer, trades_writer, shutdown), name="poller"),
+        asyncio.create_task(polymarket_poller(market, ob_writer, shutdown), name="poller"),
         asyncio.create_task(market_manager(market, markets_writer, shutdown), name="manager"),
     ]
 
@@ -505,7 +475,7 @@ async def main():
             log.error("Task %s ended with error: %s", task.get_name(), result)
 
     # Close writers
-    for w in [binance_writer, ob_writer, markets_writer, trades_writer]:
+    for w in [binance_writer, ob_writer, markets_writer]:
         w.close()
 
     log.info("Collector stopped cleanly")
